@@ -3,16 +3,18 @@ pragma solidity ^0.8.10;
 
 /**
  * @title Exponential module for storing fixed-precision decimals
+ * 用于存储固定精度小数的指数模块
  * @author Compound
  * @notice Exp is a struct which stores decimals with a fixed precision of 18 decimal places.
  *         Thus, if we wanted to store the 5.1, mantissa would store 5.1e18. That is:
  *         `Exp({mantissa: 5100000000000000000})`.
+ * Exp是一个存储小数的结构体，其精度固定为小数点后18位。因此，如果我们想存储5.1，尾数将存储5.1e18。即:' Exp({尾数:5100000000000000000})'。
  */
 contract ExponentialNoError {
-    uint constant expScale = 1e18;
+    uint constant expScale = 1e18; // 代表1
     uint constant doubleScale = 1e36;
-    uint constant halfExpScale = expScale/2;
-    uint constant mantissaOne = expScale;
+    uint constant halfExpScale = expScale/2; // 代表0.5
+    uint constant mantissaOne = expScale; // 代表1
 
     struct Exp {
         uint mantissa;
@@ -24,15 +26,18 @@ contract ExponentialNoError {
 
     /**
      * @dev Truncates the given exp to a whole number value.
+     * 将给定的exp截断为整数值。
      *      For example, truncate(Exp{mantissa: 15 * expScale}) = 15
      */
     function truncate(Exp memory exp) pure internal returns (uint) {
         // Note: We are not using careful math here as we're performing a division that cannot fail
+        // 我们没有使用careful math因为我们做的除法是不会失败的
         return exp.mantissa / expScale;
     }
 
     /**
      * @dev Multiply an Exp by a scalar, then truncate to return an unsigned integer.
+     * Exp乘以标量，然后截断以返回无符号整数。
      */
     function mul_ScalarTruncate(Exp memory a, uint scalar) pure internal returns (uint) {
         Exp memory product = mul_(a, scalar);
@@ -41,6 +46,7 @@ contract ExponentialNoError {
 
     /**
      * @dev Multiply an Exp by a scalar, truncate, then add an to an unsigned integer, returning an unsigned integer.
+     * Exp乘以一个标量，截断，然后再加上一个无符号整数，返回无符号整数。
      */
     function mul_ScalarTruncateAddUInt(Exp memory a, uint scalar, uint addend) pure internal returns (uint) {
         Exp memory product = mul_(a, scalar);
@@ -49,6 +55,7 @@ contract ExponentialNoError {
 
     /**
      * @dev Checks if first Exp is less than second Exp.
+     * 检查第一个Exp是否小于第二个Exp。
      */
     function lessThanExp(Exp memory left, Exp memory right) pure internal returns (bool) {
         return left.mantissa < right.mantissa;
@@ -70,16 +77,19 @@ contract ExponentialNoError {
 
     /**
      * @dev returns true if Exp is exactly zero
+     * 如果Exp为零则返回true
      */
     function isZeroExp(Exp memory value) pure internal returns (bool) {
         return value.mantissa == 0;
     }
 
+    // uint256 --> uint224
     function safe224(uint n, string memory errorMessage) pure internal returns (uint224) {
         require(n < 2**224, errorMessage);
         return uint224(n);
     }
 
+    // uint256 --> uint32
     function safe32(uint n, string memory errorMessage) pure internal returns (uint32) {
         require(n < 2**32, errorMessage);
         return uint32(n);

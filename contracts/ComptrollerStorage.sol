@@ -58,23 +58,29 @@ contract ComptrollerV1Storage is UnitrollerAdminStorage {
 contract ComptrollerV2Storage is ComptrollerV1Storage {
     struct Market {
         // Whether or not this market is listed
+        // 该市场是否已经上市
         bool isListed;
 
         //  Multiplier representing the most one can borrow against their collateral in this market.
         //  For instance, 0.9 to allow borrowing 90% of collateral value.
         //  Must be between 0 and 1, and stored as a mantissa.
+        // Multiplier是指一个人在这个市场上以抵押品为抵押所能借到的最多钱。例如，0.9允许借款90%的抵押品价值。必须在0和1之间，并存储为mantissa。
         uint collateralFactorMantissa;
 
         // Per-market mapping of "accounts in this asset"
+        // “该资产中的账户”的每个市场映射
         mapping(address => bool) accountMembership;
 
         // Whether or not this market receives COMP
+        // 这个市场是否能收到COMP
         bool isComped;
     }
 
     /**
      * @notice Official mapping of cTokens -> Market metadata
+     * 官方映射：cTokens -> Market元数据
      * @dev Used e.g. to determine if a market is supported
+     * 判断一个市场是否得到支持
      */
     mapping(address => Market) public markets;
 
@@ -83,14 +89,17 @@ contract ComptrollerV2Storage is ComptrollerV1Storage {
      * @notice The Pause Guardian can pause certain actions as a safety mechanism.
      *  Actions which allow users to remove their own assets cannot be paused.
      *  Liquidation / seizing / transfer can only be paused globally, not by market.
+     * Pause Guardian可以作为一种安全机制暂停某些操作。
+     * 允许用户移除自己资产的操作不能被暂停。
+     * Liquidation / seizing / transfer只能全局暂停，而不能按市场暂停。
      */
     address public pauseGuardian;
     bool public _mintGuardianPaused;
     bool public _borrowGuardianPaused;
     bool public transferGuardianPaused;
     bool public seizeGuardianPaused;
-    mapping(address => bool) public mintGuardianPaused;
-    mapping(address => bool) public borrowGuardianPaused;
+    mapping(address => bool) public mintGuardianPaused; // 按市场进行mint暂停，即存暂停
+    mapping(address => bool) public borrowGuardianPaused; // 按市场进行借暂停
 }
 
 contract ComptrollerV3Storage is ComptrollerV2Storage {

@@ -226,25 +226,31 @@ contract Comptroller is ComptrollerV7Storage, ComptrollerInterface, ComptrollerE
 
     /**
      * @notice Checks if the account should be allowed to mint tokens in the given market
+     * 检查帐户是否应该被允许在给定的市场上铸造代币
      * @param cToken The market to verify the mint against
+     * 检查对应的市场
      * @param minter The account which would get the minted tokens
+     * 将获得铸造代币的帐户
      * @param mintAmount The amount of underlying being supplied to the market in exchange for tokens
+     * 为换取代币而向市场提供的标的资产的数量
      * @return 0 if the mint is allowed, otherwise a semi-opaque error code (See ErrorReporter.sol)
      */
     function mintAllowed(address cToken, address minter, uint mintAmount) override external returns (uint) {
         // Pausing is a very serious situation - we revert to sound the alarms
+        // 暂停是一个非常严重的情况---回滚进行警报
         require(!mintGuardianPaused[cToken], "mint is paused");
 
         // Shh - currently unused
         minter;
         mintAmount;
 
+        // 官方映射：cTokens -> Market元数据，判断一个市场是否得到支持
         if (!markets[cToken].isListed) {
             return uint(Error.MARKET_NOT_LISTED);
         }
 
         // Keep the flywheel moving
-        updateCompSupplyIndex(cToken);
+        updateCompSupplyIndex(cToken);//TODO
         distributeSupplierComp(cToken, minter);
 
         return uint(Error.NO_ERROR);
@@ -332,12 +338,13 @@ contract Comptroller is ComptrollerV7Storage, ComptrollerInterface, ComptrollerE
 
     /**
      * @notice Checks if the account should be allowed to borrow the underlying asset of the given market
+     * 检查帐户是否应该被允许借给定市场的标的资产
      * @param cToken The market to verify the borrow against
      * @param borrower The account which would borrow the asset
      * @param borrowAmount The amount of underlying the account would borrow
      * @return 0 if the borrow is allowed, otherwise a semi-opaque error code (See ErrorReporter.sol)
      */
-    function borrowAllowed(address cToken, address borrower, uint borrowAmount) override external returns (uint) {
+    function borrowAllowed(address cToken, address borrower, uint borrowAmount) override external returns (uint) {//TODO
         // Pausing is a very serious situation - we revert to sound the alarms
         require(!borrowGuardianPaused[cToken], "borrow is paused");
 
@@ -1182,6 +1189,7 @@ contract Comptroller is ComptrollerV7Storage, ComptrollerInterface, ComptrollerE
 
     /**
      * @notice Accrue COMP to the market by updating the supply index
+     * 通过更新supply index，向市场增加COMP
      * @param cToken The market whose supply index to update
      * @dev Index is a cumulative sum of the COMP per cToken accrued.
      */

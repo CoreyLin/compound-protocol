@@ -16,9 +16,13 @@ import "./ExponentialNoError.sol";
 abstract contract CToken is CTokenInterface, ExponentialNoError, TokenErrorReporter {
     /**
      * @notice Initialize the money market
+     * 启动货币市场
      * @param comptroller_ The address of the Comptroller
+     * Comptroller合约地址
      * @param interestRateModel_ The address of the interest rate model
+     * 利率模型合约地址
      * @param initialExchangeRateMantissa_ The initial exchange rate, scaled by 1e18
+     * 初始汇率，乘以1e18
      * @param name_ EIP-20 name of this token
      * @param symbol_ EIP-20 symbol of this token
      * @param decimals_ EIP-20 decimal precision of this token
@@ -29,10 +33,12 @@ abstract contract CToken is CTokenInterface, ExponentialNoError, TokenErrorRepor
                         string memory name_,
                         string memory symbol_,
                         uint8 decimals_) public {
+        // 只有admin能够初始化货币市场
         require(msg.sender == admin, "only admin may initialize the market");
         require(accrualBlockNumber == 0 && borrowIndex == 0, "market may only be initialized once");
 
         // Set initial exchange rate
+        // 设置初始汇率
         initialExchangeRateMantissa = initialExchangeRateMantissa_;
         require(initialExchangeRateMantissa > 0, "initial exchange rate must be greater than zero.");
 
@@ -41,11 +47,13 @@ abstract contract CToken is CTokenInterface, ExponentialNoError, TokenErrorRepor
         require(err == NO_ERROR, "setting comptroller failed");
 
         // Initialize block number and borrow index (block number mocks depend on comptroller being set)
+        // 初始化区块号和borrow index
         accrualBlockNumber = getBlockNumber();
+        // borrowIndex初始化为mantissaOne，mantissaOne是1e18，写死的，即1
         borrowIndex = mantissaOne;
 
         // Set the interest rate model (depends on block number / borrow index)
-        err = _setInterestRateModelFresh(interestRateModel_);
+        err = _setInterestRateModelFresh(interestRateModel_);//TODO
         require(err == NO_ERROR, "setting interest rate model failed");
 
         name = name_;
@@ -53,6 +61,8 @@ abstract contract CToken is CTokenInterface, ExponentialNoError, TokenErrorRepor
         decimals = decimals_;
 
         // The counter starts true to prevent changing it from zero to non-zero (i.e. smaller cost/refund)
+        // _notEntered开始变为true，以防止将其从零更改为非零(即更小的成本/退款)
+        // _notEntered在调用initialize之前默认值是false，意味着对整个合约加了可重入锁了，此处设置为true，就是解锁。也就是说只有在调用了initialize之后才能调用其他方法。
         _notEntered = true;
     }
 
@@ -194,7 +204,9 @@ abstract contract CToken is CTokenInterface, ExponentialNoError, TokenErrorRepor
 
     /**
      * @dev Function to simply retrieve block number
+     * 用来检索当前区块号
      *  This exists mainly for inheriting test contracts to stub this result.
+     × 这主要是为了继承测试合约来存根此结果，即打桩。
      */
     function getBlockNumber() virtual internal view returns (uint) {
         return block.number;
@@ -287,24 +299,29 @@ abstract contract CToken is CTokenInterface, ExponentialNoError, TokenErrorRepor
 
     /**
      * @notice Calculates the exchange rate from the underlying to the CToken
+     * 计算从underlying到CToken的汇率
      * @dev This function does not accrue interest before calculating the exchange rate
+     * 该函数在计算汇率之前不累积/计算利息
      * @return calculated exchange rate scaled by 1e18
      */
     function exchangeRateStoredInternal() virtual internal view returns (uint) {
+        // CToken的总供应量
         uint _totalSupply = totalSupply;
-        if (_totalSupply == 0) {
+        if (_totalSupply == 0) { // 说明还没有铸造过CToken，使用初始汇率
             /*
              * If there are no tokens minted:
              *  exchangeRate = initialExchangeRate
              */
-            return initialExchangeRateMantissa;
-        } else {
+            return initialExchangeRateMantissa; // 初始汇率
+        } else { // 说明已经铸造过CToken
             /*
              * Otherwise:
              *  exchangeRate = (totalCash + totalBorrows - totalReserves) / totalSupply
              */
-            uint totalCash = getCashPrior();
+            uint totalCash = getCashPrior(); // CToken合约拥有的标的资产的数量
             uint cashPlusBorrowsMinusReserves = totalCash + totalBorrows - totalReserves;
+            // 计算CToken的价格，即一个CToken可以换多少标的资产。cashPlusBorrowsMinusReserves是标的资产，_totalSupply是CToken
+            // expScale是固定的，1e18
             uint exchangeRate = cashPlusBorrowsMinusReserves * expScale / _totalSupply;
 
             return exchangeRate;
@@ -321,8 +338,10 @@ abstract contract CToken is CTokenInterface, ExponentialNoError, TokenErrorRepor
 
     /**
      * @notice Applies accrued interest to total borrows and reserves
+     * 将应计利息应用于总借款和准备金
      * @dev This calculates interest accrued from the last checkpointed block
      *   up to the current block and writes new checkpoint to storage.
+     * 这将计算从最后一个检查点区块到当前区块的累积利息，并将新的检查点写入存储。
      */
     function accrueInterest() virtual override public returns (uint) {
         /* Remember the initial block number */
@@ -330,18 +349,22 @@ abstract contract CToken is CTokenInterface, ExponentialNoError, TokenErrorRepor
         uint accrualBlockNumberPrior = accrualBlockNumber;
 
         /* Short-circuit accumulating 0 interest */
+        // 当前区块已经计算过利息了，不再重复计算
         if (accrualBlockNumberPrior == currentBlockNumber) {
             return NO_ERROR;
         }
 
         /* Read the previous values out of storage */
-        uint cashPrior = getCashPrior();
+        // 读取状态变量到本地变量
+        uint cashPrior = getCashPrior(); // 获取此合约拥有的标的资产的余额
         uint borrowsPrior = totalBorrows;
         uint reservesPrior = totalReserves;
         uint borrowIndexPrior = borrowIndex;
 
         /* Calculate the current borrow interest rate */
+        // 计算每个区块的当前借款利率
         uint borrowRateMantissa = interestRateModel.getBorrowRate(cashPrior, borrowsPrior, reservesPrior);
+        // 利率不能过高。.0005%/区块是写死的。
         require(borrowRateMantissa <= borrowRateMaxMantissa, "borrow rate is absurdly high");
 
         /* Calculate the number of blocks elapsed since the last accrual */
@@ -349,6 +372,7 @@ abstract contract CToken is CTokenInterface, ExponentialNoError, TokenErrorRepor
 
         /*
          * Calculate the interest accumulated into borrows and reserves and the new index:
+         * 计算借款和准备金的利息积累和新index
          *  simpleInterestFactor = borrowRate * blockDelta
          *  interestAccumulated = simpleInterestFactor * totalBorrows
          *  totalBorrowsNew = interestAccumulated + totalBorrows
@@ -356,17 +380,30 @@ abstract contract CToken is CTokenInterface, ExponentialNoError, TokenErrorRepor
          *  borrowIndexNew = simpleInterestFactor * borrowIndex + borrowIndex
          */
 
+        // blockDelta数量的区块对应的利率，计算方式很简单，区块利率*区块数
         Exp memory simpleInterestFactor = mul_(Exp({mantissa: borrowRateMantissa}), blockDelta);
+        // 计算blockDelta个区块产生的利息，注意，是复利，因为利息计算之后会被算到借款额即totalBorrows中去
+        // simpleInterestFactor = borrowRate * blockDelta
+        // interestAccumulated = simpleInterestFactor * borrowsPrior
         uint interestAccumulated = mul_ScalarTruncate(simpleInterestFactor, borrowsPrior);
+        // 利息+之前的借款额。所以是复利。
+        // totalBorrowsNew = interestAccumulated + totalBorrows
         uint totalBorrowsNew = interestAccumulated + borrowsPrior;
+        // totalReservesNew = interestAccumulated * reserveFactor + totalReserves
+        // totalReserves就是累积利息中需要分给准备金的部分，具体分多少由百分比reserveFactorMantissa决定
         uint totalReservesNew = mul_ScalarTruncateAddUInt(Exp({mantissa: reserveFactorMantissa}), interestAccumulated, reservesPrior);
+        // borrowIndexNew = simpleInterestFactor * borrowIndex + borrowIndex
+        // borrowIndex表示累积的区块利率，初始值是1e18，即1。比如，第一次调用accrueInterest的话，那么
+        // borrowIndexNew = simpleInterestFactor * 1e18 + 1e18
         uint borrowIndexNew = mul_ScalarTruncateAddUInt(simpleInterestFactor, borrowIndexPrior, borrowIndexPrior);
 
         /////////////////////////
         // EFFECTS & INTERACTIONS
         // (No safe failures beyond this point)
+        // 超过这个点就没有安全故障了
 
         /* We write the previously calculated values into storage */
+        // 更新状态变量
         accrualBlockNumber = currentBlockNumber;
         borrowIndex = borrowIndexNew;
         totalBorrows = totalBorrowsNew;
@@ -380,33 +417,48 @@ abstract contract CToken is CTokenInterface, ExponentialNoError, TokenErrorRepor
 
     /**
      * @notice Sender supplies assets into the market and receives cTokens in exchange
+     * Sender向市场提供资产，并接收cTokens作为交换
      * @dev Accrues interest whether or not the operation succeeds, unless reverted
+     * 无论操作是否成功，均应计算利息，除非回滚
      * @param mintAmount The amount of the underlying asset to supply
+     * 要提供的标的资产的数量
      */
     function mintInternal(uint mintAmount) internal nonReentrant {
+        // 将应计利息应用于总借款和准备金，并更新相关状态变量
         accrueInterest();
         // mintFresh emits the actual Mint event if successful and logs on errors, so we don't need to
+        // mintFresh如果成功就会发出实际的Mint事件并记录错误，所以我们不需要这样做
+        // 用户向市场提供资产并接收cTokens作为交换，干了如下几件事：
+        // 1.mint前置检查 2.计算当前汇率 3.minter转标的资产到CToken合约 4.根据当前汇率计算应该给minter铸造的cTokens数量 5.给minter铸造cTokens 6.发出相应事件
         mintFresh(msg.sender, mintAmount);
     }
 
     /**
      * @notice User supplies assets into the market and receives cTokens in exchange
+     * 用户向市场提供资产并接收cTokens作为交换，干了如下几件事：
+     * 1.mint前置检查 2.计算当前汇率 3.minter转标的资产到CToken合约 4.根据当前汇率计算应该给minter铸造的cTokens数量 5.给minter铸造cTokens 6.发出相应事件
      * @dev Assumes interest has already been accrued up to the current block
+     * 假设利息已经累积到当前区块
      * @param minter The address of the account which is supplying the assets
+     * 提供资产的帐户地址
      * @param mintAmount The amount of the underlying asset to supply
+     * 要提供的标的资产的数量
      */
     function mintFresh(address minter, uint mintAmount) internal {
         /* Fail if mint not allowed */
+        // 检查帐户是否应该被允许在给定的市场上铸造代币
         uint allowed = comptroller.mintAllowed(address(this), minter, mintAmount);
         if (allowed != 0) {
             revert MintComptrollerRejection(allowed);
         }
 
         /* Verify market's block number equals current block number */
+        // 判断当前区块必须已经计算过利息了
         if (accrualBlockNumber != getBlockNumber()) {
             revert MintFreshnessCheck();
         }
 
+        // exchangeRateStoredInternal计算从underlying到CToken的汇率，即CToken的价格，一个CToken可以换多少标的资产
         Exp memory exchangeRate = Exp({mantissa: exchangeRateStoredInternal()});
 
         /////////////////////////
@@ -421,10 +473,19 @@ abstract contract CToken is CTokenInterface, ExponentialNoError, TokenErrorRepor
          *  in case of a fee. On success, the cToken holds an additional `actualMintAmount`
          *  of cash.
          */
+        // 我们为minter和mintAmount调用`doTransferIn`。
+        // 注意:cToken必须处理ERC-20 underlying和ETH underlying的差异。
+        // `doTransferIn`会在出现任何问题时回滚，因为我们不能确定是否副作用发生了。函数返回实际转移的金额。成功后，cToken合约持有额外的`actualMintAmount`标的资产。
+        // 类似于EIP20传输，除了它处理来自transferFrom的False结果并在那种情况下回滚。这将由于余额不足或allowance不足而回滚。
+        // 此函数返回实际收到的金额，如果transfer附加了fee，则实际收到的金额可能小于amount。
+        // 这个包装器可以安全地处理不返回值的非标准ERC-20 tokens。
+        // 执行转账，失败时回滚。返回实际转移到协议的金额。可能由于余额不足或allowance不足而回滚。
+        // doTransferIn的具体实现有两种，在CErc20和CEther中
         uint actualMintAmount = doTransferIn(minter, mintAmount);
 
         /*
          * We get the current exchange rate and calculate the number of cTokens to be minted:
+         * 我们得到当前的汇率并计算要铸造的cTokens的数量:
          *  mintTokens = actualMintAmount / exchangeRate
          */
 
@@ -432,16 +493,17 @@ abstract contract CToken is CTokenInterface, ExponentialNoError, TokenErrorRepor
 
         /*
          * We calculate the new total supply of cTokens and minter token balance, checking for overflow:
+         * 我们计算新的cTokens总供应量和minter token余额，检查溢出:
          *  totalSupplyNew = totalSupply + mintTokens
          *  accountTokensNew = accountTokens[minter] + mintTokens
          * And write them into storage
          */
-        totalSupply = totalSupply + mintTokens;
-        accountTokens[minter] = accountTokens[minter] + mintTokens;
+        totalSupply = totalSupply + mintTokens; // cTokens总供应量增加
+        accountTokens[minter] = accountTokens[minter] + mintTokens; // minter的cTokens余额增加
 
         /* We emit a Mint event, and a Transfer event */
-        emit Mint(minter, actualMintAmount, mintTokens);
-        emit Transfer(address(this), minter, mintTokens);
+        emit Mint(minter, actualMintAmount, mintTokens); // minter地址，minter转给CToken合约的标的资产数量，铸造的cTokens数量
+        emit Transfer(address(this), minter, mintTokens); // EIP20标准的Transfer事件
 
         /* We call the defense hook */
         // unused function
@@ -550,9 +612,12 @@ abstract contract CToken is CTokenInterface, ExponentialNoError, TokenErrorRepor
 
     /**
       * @notice Sender borrows assets from the protocol to their own address
+      * sender从协议中借资产到自己的地址
       * @param borrowAmount The amount of the underlying asset to borrow
+      * 要借的标的资产的数额
       */
     function borrowInternal(uint borrowAmount) internal nonReentrant {
+        // 将应计利息应用于总借款和准备金。这将计算从最后一个检查点区块到当前区块的累积利息，并将新的检查点写入存储。
         accrueInterest();
         // borrowFresh emits borrow-specific logs on errors, so we don't need to
         borrowFresh(payable(msg.sender), borrowAmount);
@@ -560,9 +625,11 @@ abstract contract CToken is CTokenInterface, ExponentialNoError, TokenErrorRepor
 
     /**
       * @notice Users borrow assets from the protocol to their own address
+      * 用户从协议中借资产到自己的地址
       * @param borrowAmount The amount of the underlying asset to borrow
+      * 要借的标的资产的数额
       */
-    function borrowFresh(address payable borrower, uint borrowAmount) internal {
+    function borrowFresh(address payable borrower, uint borrowAmount) internal {//TODO
         /* Fail if borrow not allowed */
         uint allowed = comptroller.borrowAllowed(address(this), borrower, borrowAmount);
         if (allowed != 0) {
@@ -895,8 +962,10 @@ abstract contract CToken is CTokenInterface, ExponentialNoError, TokenErrorRepor
 
     /**
       * @notice Sets a new comptroller for the market
+      * 为市场设置一个新的审计员
       * @dev Admin function to set a new comptroller
       * @return uint 0=success, otherwise a failure (see ErrorReporter.sol for details)
+      * 返回0表示成功
       */
     function _setComptroller(ComptrollerInterface newComptroller) override public returns (uint) {
         // Check caller is admin
@@ -914,7 +983,7 @@ abstract contract CToken is CTokenInterface, ExponentialNoError, TokenErrorRepor
         // Emit NewComptroller(oldComptroller, newComptroller)
         emit NewComptroller(oldComptroller, newComptroller);
 
-        return NO_ERROR;
+        return NO_ERROR; // 常量0
     }
 
     /**
@@ -1123,14 +1192,19 @@ abstract contract CToken is CTokenInterface, ExponentialNoError, TokenErrorRepor
 
     /**
      * @notice Gets balance of this contract in terms of the underlying
+     * 获取此合约拥有的标的资产的余额
      * @dev This excludes the value of the current message, if any
+     * 这排除了当前消息的值(如果有的话)
      * @return The quantity of underlying owned by this contract
+     * 本合约所拥有的标的资产数量
      */
+    // 此处只是声明，并没有实现，要子合约来实现，比如CErc20, CEther, CDaiDelegate
     function getCashPrior() virtual internal view returns (uint);
 
     /**
      * @dev Performs a transfer in, reverting upon failure. Returns the amount actually transferred to the protocol, in case of a fee.
      *  This may revert due to insufficient balance or insufficient allowance.
+     * 执行转账，失败时回滚。返回实际转移到协议的金额。可能由于余额不足或allowance不足而回滚。
      */
     function doTransferIn(address from, uint amount) virtual internal returns (uint);
 
@@ -1143,14 +1217,16 @@ abstract contract CToken is CTokenInterface, ExponentialNoError, TokenErrorRepor
 
 
     /*** Reentrancy Guard ***/
+    // 可重入保护
 
     /**
      * @dev Prevents a contract from calling itself, directly or indirectly.
+     * 防止合约直接或间接调用自身。
      */
     modifier nonReentrant() {
-        require(_notEntered, "re-entered");
-        _notEntered = false;
-        _;
-        _notEntered = true; // get a gas-refund post-Istanbul
+        require(_notEntered, "re-entered"); // _notEntered为true代表没有进入
+        _notEntered = false; // 已经进入
+        _; // 执行方法
+        _notEntered = true; // get a gas-refund post-Istanbul 方法执行完后设置为没有进入
     }
 }

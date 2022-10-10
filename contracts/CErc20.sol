@@ -15,10 +15,15 @@ interface CompLike {
 contract CErc20 is CToken, CErc20Interface {
     /**
      * @notice Initialize the new money market
+     * 初始化新的货币市场
      * @param underlying_ The address of the underlying asset
+     * 标的资产地址
      * @param comptroller_ The address of the Comptroller
+     * 审计合约地址
      * @param interestRateModel_ The address of the interest rate model
+     * 利率模型合约地址
      * @param initialExchangeRateMantissa_ The initial exchange rate, scaled by 1e18
+     * 初始汇率，乘以1e18
      * @param name_ ERC-20 name of this token
      * @param symbol_ ERC-20 symbol of this token
      * @param decimals_ ERC-20 decimal precision of this token
@@ -31,19 +36,24 @@ contract CErc20 is CToken, CErc20Interface {
                         string memory symbol_,
                         uint8 decimals_) public {
         // CToken initialize does the bulk of the work
+        // CToken初始化完成了大部分工作
         super.initialize(comptroller_, interestRateModel_, initialExchangeRateMantissa_, name_, symbol_, decimals_);
 
         // Set underlying and sanity check it
         underlying = underlying_;
-        EIP20Interface(underlying).totalSupply();
+        EIP20Interface(underlying).totalSupply(); // 完整性检查，检查underlying是不是有totalSupply接口
     }
 
     /*** User Interface ***/
+    // 用户接口
 
     /**
      * @notice Sender supplies assets into the market and receives cTokens in exchange
+     * Sender向市场提供资产，并接收cTokens作为交换
      * @dev Accrues interest whether or not the operation succeeds, unless reverted
+     * 无论操作是否成功，均应计算利息，除非回滚
      * @param mintAmount The amount of the underlying asset to supply
+     * 要提供的标的资产的数量
      * @return uint 0=success, otherwise a failure (see ErrorReporter.sol for details)
      */
     function mint(uint mintAmount) override external returns (uint) {
@@ -75,10 +85,12 @@ contract CErc20 is CToken, CErc20Interface {
 
     /**
       * @notice Sender borrows assets from the protocol to their own address
+      * sender从协议中借资产到自己的地址
       * @param borrowAmount The amount of the underlying asset to borrow
+      * 要借的标的资产的数额
       * @return uint 0=success, otherwise a failure (see ErrorReporter.sol for details)
       */
-    function borrow(uint borrowAmount) override external returns (uint) {
+    function borrow(uint borrowAmount) override external returns (uint) {//TODO
         borrowInternal(borrowAmount);
         return NO_ERROR;
     }
@@ -141,12 +153,15 @@ contract CErc20 is CToken, CErc20Interface {
 
     /**
      * @notice Gets balance of this contract in terms of the underlying
+     * 获取此合约拥有的标的资产的余额
      * @dev This excludes the value of the current message, if any
+     * 这排除了当前消息的值(如果有的话)
      * @return The quantity of underlying tokens owned by this contract
+     * 本合约所拥有的标的资产数量
      */
     function getCashPrior() virtual override internal view returns (uint) {
         EIP20Interface token = EIP20Interface(underlying);
-        return token.balanceOf(address(this));
+        return token.balanceOf(address(this)); // 直接从标的ERC20合约取最新的余额
     }
 
     /**
@@ -158,31 +173,41 @@ contract CErc20 is CToken, CErc20Interface {
      *      Note: This wrapper safely handles non-standard ERC-20 tokens that do not return a value.
      *            See here: https://medium.com/coinmonks/missing-return-value-bug-at-least-130-tokens-affected-d67bf08521ca
      */
+    // 类似于EIP20传输，除了它处理来自transferFrom的False结果并在那种情况下回滚。这将由于余额不足或allowance不足而回滚。
+    // 此函数返回实际收到的金额，如果transfer附加了fee，则实际收到的金额可能小于amount。
+    // 这个包装器可以安全地处理不返回值的非标准ERC-20 tokens。
+    // 执行转账，失败时回滚。返回实际转移到协议的金额。可能由于余额不足或allowance不足而回滚。
     function doTransferIn(address from, uint amount) virtual override internal returns (uint) {
         // Read from storage once
         address underlying_ = underlying;
-        EIP20NonStandardInterface token = EIP20NonStandardInterface(underlying_);
-        uint balanceBefore = EIP20Interface(underlying_).balanceOf(address(this));
-        token.transferFrom(from, address(this), amount);
+        EIP20NonStandardInterface token = EIP20NonStandardInterface(underlying_); // 非标准EIP20接口
+        uint balanceBefore = EIP20Interface(underlying_).balanceOf(address(this)); // 用标准EIP20接口取当前合约拥有的标的资产余额，即转账前的余额
+        token.transferFrom(from, address(this), amount); // 转amount到本合约
+
+        // returndatasize用于获取调用其他合约的result的size，returndatacopy用于获取指定字节数的返回值
+        // https://eips.ethereum.org/EIPS/eip-211
+        // https://ethervm.io/#3D
+        // https://ethervm.io/#3E
 
         bool success;
         assembly {
             switch returndatasize()
-                case 0 {                       // This is a non-standard ERC-20
-                    success := not(0)          // set success to true
+                case 0 {                       // This is a non-standard ERC-20 没有返回result，因为非标准ERC20合约transfer,transferFrom不返回任何值
+                    success := not(0)          // set success to true 代码能运行到此处，说明没有回滚，转账成功。用not(0)表示true非常巧妙。
                 }
-                case 32 {                      // This is a compliant ERC-20
+                case 32 {                      // This is a compliant ERC-20 返回32字节的数据，即uint256
                     returndatacopy(0, 0, 32)
                     success := mload(0)        // Set `success = returndata` of override external call
                 }
-                default {                      // This is an excessively non-compliant ERC-20, revert.
-                    revert(0, 0)
+                default {                      // This is an excessively non-compliant ERC-20, revert. 这是一个极度不合规的ERC-20，回滚。
+                    revert(0, 0)               // 注意用法，https://ethervm.io/#FD
                 }
         }
         require(success, "TOKEN_TRANSFER_IN_FAILED");
 
         // Calculate the amount that was *actually* transferred
-        uint balanceAfter = EIP20Interface(underlying_).balanceOf(address(this));
+        // 计算“实际”转移的金额。主要是为了防止某些非主流ERC20合约，虽然调了transferFrom转账，但有可能并没有转到amount那么多，合约可能收取了fee，这取决于ERC20合约的逻辑
+        uint balanceAfter = EIP20Interface(underlying_).balanceOf(address(this)); // 用标准EIP20接口取当前合约拥有的标的资产余额，即转账后的余额
         return balanceAfter - balanceBefore;   // underflow already checked above, just subtract
     }
 

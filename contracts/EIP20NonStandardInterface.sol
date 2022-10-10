@@ -4,6 +4,7 @@ pragma solidity ^0.8.10;
 /**
  * @title EIP20NonStandardInterface
  * @dev Version of ERC20 with no return values for `transfer` and `transferFrom`
+ * 没有transfer和transferFrom返回值的ERC20版本
  *  See https://medium.com/coinmonks/missing-return-value-bug-at-least-130-tokens-affected-d67bf08521ca
  */
 interface EIP20NonStandardInterface {
