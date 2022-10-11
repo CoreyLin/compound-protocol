@@ -31,6 +31,7 @@ contract ComptrollerV1Storage is UnitrollerAdminStorage {
     /**
      * @notice Oracle which gives the price of any given asset
      */
+    // Oracle可以给出任何给定资产的价格
     PriceOracle public oracle;
 
     /**
@@ -50,6 +51,7 @@ contract ComptrollerV1Storage is UnitrollerAdminStorage {
 
     /**
      * @notice Per-account mapping of "assets you are in", capped by maxAssets
+     * “你所在的资产”的每个帐户映射，以maxAssets为上限
      */
     mapping(address => CToken[]) public accountAssets;
 
@@ -141,6 +143,7 @@ contract ComptrollerV4Storage is ComptrollerV3Storage {
     address public borrowCapGuardian;
 
     // @notice Borrow caps enforced by borrowAllowed for each cToken address. Defaults to zero which corresponds to unlimited borrowing.
+    // 借用上限由borrowAllowed对每个cToken地址强制执行。默认为零，相当于无限借贷。
     mapping(address => uint) public borrowCaps;
 }
 

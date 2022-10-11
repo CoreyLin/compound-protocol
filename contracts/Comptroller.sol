@@ -13,6 +13,7 @@ import "./Governance/Comp.sol";
  * @title Compound's Comptroller Contract
  * @author Compound
  */
+// 通过对比代码Comptroller和ComptrollerG7，可以发现基本类似，改动了部分逻辑，故可以认为Comptroller是ComptrollerG8, 也就是目前正在使用的Comptroller逻辑。
 contract Comptroller is ComptrollerV7Storage, ComptrollerInterface, ComptrollerErrorReporter, ExponentialNoError {
     /// @notice Emitted when an admin supports a market
     event MarketListed(CToken cToken);
@@ -133,20 +134,28 @@ contract Comptroller is ComptrollerV7Storage, ComptrollerInterface, ComptrollerE
 
     /**
      * @notice Add the market to the borrower's "assets in" for liquidity calculations
+     * 将本市场添加到借款人的“assets in”中以进行流动性计算
      * @param cToken The market to enter
+     * 要进入的市场
      * @param borrower The address of the account to modify
+     * 借款人地址
      * @return Success indicator for whether the market was entered
+     * 是否进入市场的成功指标
      */
     function addToMarketInternal(CToken cToken, address borrower) internal returns (Error) {
+        // address(cToken): 合约转换为address，即取合约地址
+        // 官方映射：cTokens -> Market元数据，判断一个市场是否得到支持
         Market storage marketToJoin = markets[address(cToken)];
 
         if (!marketToJoin.isListed) {
             // market is not listed, cannot join
+            // 市场未上市，不能加入
             return Error.MARKET_NOT_LISTED;
         }
 
         if (marketToJoin.accountMembership[borrower] == true) {
             // already joined
+            // 借款人已经加入了该市场，不用重复加入
             return Error.NO_ERROR;
         }
 
@@ -155,8 +164,11 @@ contract Comptroller is ComptrollerV7Storage, ComptrollerInterface, ComptrollerE
         //  this avoids having to iterate through the list for the most common use cases
         //  that is, only when we need to perform liquidity checks
         //  and not whenever we want to check if an account is in a particular market
+        // 经受住了挑战，加入名单
+        // 我们将这些数据冗余地存储起来，作为一个重要的优化，这避免了在最常见的用例中对列表进行迭代，
+        // 也就是说，只有当我们需要执行流动性检查时，而不是当我们想要检查某个账户是否在某个特定市场时
         marketToJoin.accountMembership[borrower] = true;
-        accountAssets[borrower].push(cToken);
+        accountAssets[borrower].push(cToken); // “你所在的资产”的每个帐户映射，以maxAssets为上限
 
         emit MarketEntered(cToken, borrower);
 
@@ -344,51 +356,64 @@ contract Comptroller is ComptrollerV7Storage, ComptrollerInterface, ComptrollerE
      * @param borrowAmount The amount of underlying the account would borrow
      * @return 0 if the borrow is allowed, otherwise a semi-opaque error code (See ErrorReporter.sol)
      */
-    function borrowAllowed(address cToken, address borrower, uint borrowAmount) override external returns (uint) {//TODO
+    function borrowAllowed(address cToken, address borrower, uint borrowAmount) override external returns (uint) {
         // Pausing is a very serious situation - we revert to sound the alarms
         require(!borrowGuardianPaused[cToken], "borrow is paused");
 
         if (!markets[cToken].isListed) {
+            // 枚举转换为uint256，solidity官方文档记载：
+            // Enums are one way to create a user-defined type in Solidity. They are explicitly convertible to and from all integer types but implicit conversion is not allowed.
+            // 枚举是在Solidity中创建用户定义类型的一种方法。它们可以显式地与所有整数类型进行转换，但不允许隐式转换。
             return uint(Error.MARKET_NOT_LISTED);
         }
 
         if (!markets[cToken].accountMembership[borrower]) {
             // only cTokens may call borrowAllowed if borrower not in market
+            // 如果借款人不在市场中，只有cTokens可以调用borrowAllowed
             require(msg.sender == cToken, "sender must be cToken");
 
             // attempt to add borrower to the market
+            // 试图向市场增加借款人
+            // 将本市场添加到借款人的“assets in”中以进行流动性计算
             Error err = addToMarketInternal(CToken(msg.sender), borrower);
             if (err != Error.NO_ERROR) {
                 return uint(err);
             }
 
             // it should be impossible to break the important invariant
+            // 应该不可能破坏重要不变量
             assert(markets[cToken].accountMembership[borrower]);
         }
 
+        // 获取CToken对应的标的资产的价格，如果为0,说明没有取到价格
         if (oracle.getUnderlyingPrice(CToken(cToken)) == 0) {
             return uint(Error.PRICE_ERROR);
         }
 
 
+        // 借用上限由borrowAllowed对每个cToken地址强制执行。默认为零，相当于无限借贷。
         uint borrowCap = borrowCaps[cToken];
         // Borrow cap of 0 corresponds to unlimited borrowing
         if (borrowCap != 0) {
-            uint totalBorrows = CToken(cToken).totalBorrows();
-            uint nextTotalBorrows = add_(totalBorrows, borrowAmount);
-            require(nextTotalBorrows < borrowCap, "market borrow cap reached");
+            uint totalBorrows = CToken(cToken).totalBorrows(); // 现在CToken中总借款量
+            uint nextTotalBorrows = add_(totalBorrows, borrowAmount); //  加上这次借款后的量
+            require(nextTotalBorrows < borrowCap, "market borrow cap reached"); // 必须小于规定的上限
         }
 
+        // 确定如果给定的金额被赎回/借款，帐户的流动性是多少。
+        // shortfall代表“用户在所有上市的cTokens借款的价值总额 - 用户在所有上市的cTokens的抵押价值总额”，如果大于0,则说明抵押物不足了，就不能赎回cTokens或借款。
+        // 可以用于判断用户在所有上市的cTokens的抵押价值总额是否大于用户在所有上市的cTokens借款的价值总额，即抵押物是否充足。这一步非常非常重要，直接和安全性密切相关。
         (Error err, , uint shortfall) = getHypotheticalAccountLiquidityInternal(borrower, CToken(cToken), 0, borrowAmount);
         if (err != Error.NO_ERROR) {
             return uint(err);
         }
+        // 用户在所有上市的cTokens的抵押价值总额必须大于用户在所有上市的cTokens借款的价值总额，才能借标的资产
         if (shortfall > 0) {
             return uint(Error.INSUFFICIENT_LIQUIDITY);
         }
 
         // Keep the flywheel moving
-        Exp memory borrowIndex = Exp({mantissa: CToken(cToken).borrowIndex()});
+        Exp memory borrowIndex = Exp({mantissa: CToken(cToken).borrowIndex()});//TODO
         updateCompBorrowIndex(cToken, borrowIndex);
         distributeBorrowerComp(cToken, borrower, borrowIndex);
 
@@ -655,12 +680,15 @@ contract Comptroller is ComptrollerV7Storage, ComptrollerInterface, ComptrollerE
     }
 
     /*** Liquidity/Liquidation Calculations ***/
+    // 流动性/清算计算
 
     /**
      * @dev Local vars for avoiding stack-depth limits in calculating account liquidity.
      *  Note that `cTokenBalance` is the number of cTokens the account owns in the market,
      *  whereas `borrowBalance` is the amount of underlying that the account has borrowed.
      */
+    // 在计算帐户流动性时避免stack-depth限制的局部变量。
+    // 注意，`cTokenBalance`是账户在市场上拥有的cTokens的数量，而`borrowBalance`是账户已借入的标的金额。
     struct AccountLiquidityLocalVars {
         uint sumCollateral;
         uint sumBorrowPlusEffects;
@@ -717,15 +745,25 @@ contract Comptroller is ComptrollerV7Storage, ComptrollerInterface, ComptrollerE
 
     /**
      * @notice Determine what the account liquidity would be if the given amounts were redeemed/borrowed
+     * 确定如果给定的金额被赎回/借款，帐户的流动性是多少
+     * 可以用于判断用户在所有上市的cTokens的抵押价值总额是否大于用户在所有上市的cTokens借款的价值总额
      * @param cTokenModify The market to hypothetically redeem/borrow in
+     * 假设赎回/借款的市场
      * @param account The account to determine liquidity for
+     * 要确定其流动性的帐户
      * @param redeemTokens The number of tokens to hypothetically redeem
+     * 假设要赎回的代币数量
      * @param borrowAmount The amount of underlying to hypothetically borrow
+     * 假设underlying的借款金额
      * @dev Note that we calculate the exchangeRateStored for each collateral cToken using stored data,
      *  without calculating accumulated interest.
+     * 我们使用存储的数据计算每个抵押cToken的exchangeRateStored，而不计算累计利息。
      * @return (possible error code,
                 hypothetical account liquidity in excess of collateral requirements,
      *          hypothetical account shortfall below collateral requirements)
+     * 可能的错误码
+     * 假设账户流动性超过担保要求
+     * 假设账户缺口低于担保要求
      */
     function getHypotheticalAccountLiquidityInternal(
         address account,
@@ -737,50 +775,69 @@ contract Comptroller is ComptrollerV7Storage, ComptrollerInterface, ComptrollerE
         uint oErr;
 
         // For each asset the account is in
+        // 对用户所在的每个CToken进行轮循
         CToken[] memory assets = accountAssets[account];
-        for (uint i = 0; i < assets.length; i++) {
+        for (uint i = 0; i < assets.length; i++) { // 此for循环很重要
             CToken asset = assets[i];
 
             // Read the balances and exchange rate from the cToken
+            // 从cToken中读取余额和汇率
+            // getAccountSnapshot获取帐户的CToken余额，借款余额（underlying），汇率（一个CToken值多少underlying）
             (oErr, vars.cTokenBalance, vars.borrowBalance, vars.exchangeRateMantissa) = asset.getAccountSnapshot(account);
             if (oErr != 0) { // semi-opaque error code, we assume NO_ERROR == 0 is invariant between upgrades
                 return (Error.SNAPSHOT_ERROR, 0, 0);
             }
+            // Multiplier是指一个人在这个市场上以抵押品为抵押所能借到的最多钱。例如，0.9允许借款90%的抵押品价值。必须在0和1之间，并存储为mantissa。
             vars.collateralFactor = Exp({mantissa: markets[address(asset)].collateralFactorMantissa});
             vars.exchangeRate = Exp({mantissa: vars.exchangeRateMantissa});
 
             // Get the normalized price of the asset
-            vars.oraclePriceMantissa = oracle.getUnderlyingPrice(asset);
-            if (vars.oraclePriceMantissa == 0) {
+            // 得到资产的标准化价格
+            vars.oraclePriceMantissa = oracle.getUnderlyingPrice(asset); // 获取cToken资产的underlying价格
+            if (vars.oraclePriceMantissa == 0) { // 0代表获取价格失败
                 return (Error.PRICE_ERROR, 0, 0);
             }
             vars.oraclePrice = Exp({mantissa: vars.oraclePriceMantissa});
 
             // Pre-compute a conversion factor from tokens -> ether (normalized price value)
+            // 从cToken -> ether预先计算一个转换因子(标准化价格价值)
+            // 抵押因子 × 汇率 × 标的资产价格
+            // tokensToDenom实际就是计算一个cToken对应的抵押价值，以ether计价
             vars.tokensToDenom = mul_(mul_(vars.collateralFactor, vars.exchangeRate), vars.oraclePrice);
 
             // sumCollateral += tokensToDenom * cTokenBalance
+            // tokensToDenom * cTokenBalance就是用户拥有的当前这种cToken的余额对应的抵押价值，以ether计价
+            // +=就是把for循环中用户拥有的cTokens的抵押价值加起来
             vars.sumCollateral = mul_ScalarTruncateAddUInt(vars.tokensToDenom, vars.cTokenBalance, vars.sumCollateral);
 
             // sumBorrowPlusEffects += oraclePrice * borrowBalance
+            // oraclePrice * borrowBalance就是用户从当前这种cToken中借的标的资产的价值，以ether计价
+            // +=就是把for循环中所有cToken中借的价值加起来
             vars.sumBorrowPlusEffects = mul_ScalarTruncateAddUInt(vars.oraclePrice, vars.borrowBalance, vars.sumBorrowPlusEffects);
 
             // Calculate effects of interacting with cTokenModify
-            if (asset == cTokenModify) {
+            // 计算与cTokenModify交互的效果
+            if (asset == cTokenModify) { // 如果当前轮循到的这个cToken就是我们要赎回/借款的cToken
                 // redeem effect
                 // sumBorrowPlusEffects += tokensToDenom * redeemTokens
+                // tokensToDenom实际就是计算一个cToken对应的抵押价值，以ether计价。redeemTokens是要赎回的cToken数量。相乘就是要赎回的cToken对应的抵押价值，以ether计价。
+                // 计算这个的原因就是赎回意味着减少cToken，cToken减少的话就意味着抵押价值减少，抵押价值减少可能会导致总的抵押价值低于总的借款价值，就会导致清算
                 vars.sumBorrowPlusEffects = mul_ScalarTruncateAddUInt(vars.tokensToDenom, redeemTokens, vars.sumBorrowPlusEffects);
 
                 // borrow effect
                 // sumBorrowPlusEffects += oraclePrice * borrowAmount
+                // oraclePrice * borrowAmount表示即将从这个cToken的标的资产借款对应的价值，以ether计价
                 vars.sumBorrowPlusEffects = mul_ScalarTruncateAddUInt(vars.oraclePrice, borrowAmount, vars.sumBorrowPlusEffects);
             }
         }
 
         // These are safe, as the underflow condition is checked first
+        // 这些是安全的，因为首先要检查下溢条件
+        // 用户在所有上市的cTokens的抵押价值总额大于用户在所有上市的cTokens借款的价值总额
         if (vars.sumCollateral > vars.sumBorrowPlusEffects) {
             return (Error.NO_ERROR, vars.sumCollateral - vars.sumBorrowPlusEffects, 0);
         } else {
+            // 用户在所有上市的cTokens的抵押价值总额小于等于用户在所有上市的cTokens借款的价值总额
             return (Error.NO_ERROR, 0, vars.sumBorrowPlusEffects - vars.sumCollateral);
         }
     }

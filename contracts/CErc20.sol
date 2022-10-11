@@ -90,17 +90,19 @@ contract CErc20 is CToken, CErc20Interface {
       * 要借的标的资产的数额
       * @return uint 0=success, otherwise a failure (see ErrorReporter.sol for details)
       */
-    function borrow(uint borrowAmount) override external returns (uint) {//TODO
+    function borrow(uint borrowAmount) override external returns (uint) {
         borrowInternal(borrowAmount);
         return NO_ERROR;
     }
 
     /**
      * @notice Sender repays their own borrow
+     * sender偿还他们自己的借款
      * @param repayAmount The amount to repay, or -1 for the full outstanding amount
+     * 偿还金额，或-1表示全部未偿还金额
      * @return uint 0=success, otherwise a failure (see ErrorReporter.sol for details)
      */
-    function repayBorrow(uint repayAmount) override external returns (uint) {
+    function repayBorrow(uint repayAmount) override external returns (uint) {//TODO
         repayBorrowInternal(repayAmount);
         return NO_ERROR;
     }

@@ -189,16 +189,18 @@ abstract contract CToken is CTokenInterface, ExponentialNoError, TokenErrorRepor
 
     /**
      * @notice Get a snapshot of the account's balances, and the cached exchange rate
+     * 获取帐户的CToken余额，借款余额（underlying），汇率（一个CToken值多少underlying）
      * @dev This is used by comptroller to more efficiently perform liquidity checks.
+     * 这被审计合约用来更有效地执行流动性检查。
      * @param account Address of the account to snapshot
      * @return (possible error, token balance, borrow balance, exchange rate mantissa)
      */
     function getAccountSnapshot(address account) override external view returns (uint, uint, uint, uint) {
         return (
             NO_ERROR,
-            accountTokens[account],
-            borrowBalanceStoredInternal(account),
-            exchangeRateStoredInternal()
+            accountTokens[account], // CToken余额
+            borrowBalanceStoredInternal(account), // 根据存储的数据返回账户借款余额
+            exchangeRateStoredInternal() // 计算从underlying到CToken的汇率，即一个CToken值多少underlying
         );
     }
 
@@ -258,22 +260,28 @@ abstract contract CToken is CTokenInterface, ExponentialNoError, TokenErrorRepor
 
     /**
      * @notice Return the borrow balance of account based on stored data
+     * 根据存储的数据返回账户借款余额
      * @param account The address whose balance should be calculated
      * @return (error code, the calculated balance or 0 if error code is non-zero)
      */
     function borrowBalanceStoredInternal(address account) internal view returns (uint) {
         /* Get borrowBalance and borrowIndex */
+        // accountBorrows是帐户地址到未偿还借款余额的映射
         BorrowSnapshot storage borrowSnapshot = accountBorrows[account];
 
         /* If borrowBalance = 0 then borrowIndex is likely also 0.
          * Rather than failing the calculation with a division by 0, we immediately return 0 in this case.
          */
+        // principal代表应用最近的余额变更操作后的总余额(包括应计利息)
+        // 如果borrowBalance = 0，那么borrowIndex也可能为0。在这种情况下，我们不会因为除以0而导致计算失败，而是立即返回0。
         if (borrowSnapshot.principal == 0) {
             return 0;
         }
 
         /* Calculate new borrow balance using the interest index:
+         * 使用利率指数计算新借款余额:
          *  recentBorrowBalance = borrower.borrowBalance * market.borrowIndex / borrower.borrowIndex
+         * market.borrowIndex是对于market全局的，borrower.borrowBalance和borrower.borrowIndex是针对这个借款人的
          */
         uint principalTimesIndex = borrowSnapshot.principal * borrowIndex;
         return principalTimesIndex / borrowSnapshot.interestIndex;
@@ -629,7 +637,7 @@ abstract contract CToken is CTokenInterface, ExponentialNoError, TokenErrorRepor
       * @param borrowAmount The amount of the underlying asset to borrow
       * 要借的标的资产的数额
       */
-    function borrowFresh(address payable borrower, uint borrowAmount) internal {//TODO
+    function borrowFresh(address payable borrower, uint borrowAmount) internal {
         /* Fail if borrow not allowed */
         uint allowed = comptroller.borrowAllowed(address(this), borrower, borrowAmount);
         if (allowed != 0) {
@@ -637,21 +645,24 @@ abstract contract CToken is CTokenInterface, ExponentialNoError, TokenErrorRepor
         }
 
         /* Verify market's block number equals current block number */
+        // 判断当前区块必须已经计算过利息了
         if (accrualBlockNumber != getBlockNumber()) {
             revert BorrowFreshnessCheck();
         }
 
         /* Fail gracefully if protocol has insufficient underlying cash */
+        // 如果协议的underlying资金不足，则优雅失败
         if (getCashPrior() < borrowAmount) {
             revert BorrowCashNotAvailable();
         }
 
         /*
          * We calculate the new borrower and total borrow balances, failing on overflow:
+         * 计算该借款人的借款余额和总借款余额，在溢出时失败:
          *  accountBorrowNew = accountBorrow + borrowAmount
          *  totalBorrowsNew = totalBorrows + borrowAmount
          */
-        uint accountBorrowsPrev = borrowBalanceStoredInternal(borrower);
+        uint accountBorrowsPrev = borrowBalanceStoredInternal(borrower); // 根据存储的数据返回账户借款余额，这是现计算出来的
         uint accountBorrowsNew = accountBorrowsPrev + borrowAmount;
         uint totalBorrowsNew = totalBorrows + borrowAmount;
 
@@ -663,6 +674,8 @@ abstract contract CToken is CTokenInterface, ExponentialNoError, TokenErrorRepor
          * We write the previously calculated values into storage.
          *  Note: Avoid token reentrancy attacks by writing increased borrow before external transfer.
         `*/
+        // 将上面计算的值写入存储
+        // 通过在external transfer之前写入增加的借款来避免token重入攻击。
         accountBorrows[borrower].principal = accountBorrowsNew;
         accountBorrows[borrower].interestIndex = borrowIndex;
         totalBorrows = totalBorrowsNew;
@@ -673,6 +686,9 @@ abstract contract CToken is CTokenInterface, ExponentialNoError, TokenErrorRepor
          *  On success, the cToken borrowAmount less of cash.
          *  doTransferOut reverts if anything goes wrong, since we can't be sure if side effects occurred.
          */
+        // 我们为借款人和borrowAmount调用doTransferOut。
+        // 注意:cToken必须处理ERC-20和ETH之间的差异。
+        // 成功后，cToken的资金减少。如果出现任何错误，doTransferOut将回滚，因为我们不能确定是否发生了副作用。
         doTransferOut(borrower, borrowAmount);
 
         /* We emit a Borrow event */
@@ -683,7 +699,7 @@ abstract contract CToken is CTokenInterface, ExponentialNoError, TokenErrorRepor
      * @notice Sender repays their own borrow
      * @param repayAmount The amount to repay, or -1 for the full outstanding amount
      */
-    function repayBorrowInternal(uint repayAmount) internal nonReentrant {
+    function repayBorrowInternal(uint repayAmount) internal nonReentrant {//TODO
         accrueInterest();
         // repayBorrowFresh emits repay-borrow-specific logs on errors, so we don't need to
         repayBorrowFresh(msg.sender, msg.sender, repayAmount);
