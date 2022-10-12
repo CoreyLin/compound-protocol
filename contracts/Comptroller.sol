@@ -262,7 +262,7 @@ contract Comptroller is ComptrollerV7Storage, ComptrollerInterface, ComptrollerE
         }
 
         // Keep the flywheel moving
-        updateCompSupplyIndex(cToken);//TODO
+        updateCompSupplyIndex(cToken);
         distributeSupplierComp(cToken, minter);
 
         return uint(Error.NO_ERROR);
@@ -290,35 +290,43 @@ contract Comptroller is ComptrollerV7Storage, ComptrollerInterface, ComptrollerE
 
     /**
      * @notice Checks if the account should be allowed to redeem tokens in the given market
+     * 检查账户是否应该被允许在给定的市场上赎回cTokens
      * @param cToken The market to verify the redeem against
      * @param redeemer The account which would redeem the tokens
      * @param redeemTokens The number of cTokens to exchange for the underlying asset in the market
      * @return 0 if the redeem is allowed, otherwise a semi-opaque error code (See ErrorReporter.sol)
+     * 注意返回值，返回值为0,表示allow；为非0,表示不allow。不会用回滚来表示不allow。
      */
     function redeemAllowed(address cToken, address redeemer, uint redeemTokens) override external returns (uint) {
+        // 注意redeemAllowedInternal的返回值，返回值为0,表示allow；为非0,表示不allow。不会用回滚来表示不allow。
         uint allowed = redeemAllowedInternal(cToken, redeemer, redeemTokens);
         if (allowed != uint(Error.NO_ERROR)) {
-            return allowed;
+            return allowed; // 返回非0
         }
 
         // Keep the flywheel moving
         updateCompSupplyIndex(cToken);
         distributeSupplierComp(cToken, redeemer);
 
-        return uint(Error.NO_ERROR);
+        return uint(Error.NO_ERROR); // 返回0
     }
 
+    // 注意返回值，返回值为0,表示allow；为非0,表示不allow。不会用回滚来表示不allow。
     function redeemAllowedInternal(address cToken, address redeemer, uint redeemTokens) internal view returns (uint) {
         if (!markets[cToken].isListed) {
             return uint(Error.MARKET_NOT_LISTED);
         }
 
         /* If the redeemer is not 'in' the market, then we can bypass the liquidity check */
+        // 如果赎回者不在市场中(即之前从来没有参与过这个市场)，那么我们就可以绕过流动性检查，即不需要进行流动性检查
         if (!markets[cToken].accountMembership[redeemer]) {
             return uint(Error.NO_ERROR);
         }
 
         /* Otherwise, perform a hypothetical liquidity check to guard against shortfall */
+        // 否则，执行一个假设的流动性检查以防止短缺，防止赎回者在所有cTokens的总的抵押价值低于其在所有cTokens的总的借款价值，以ether计价
+        // getHypotheticalAccountLiquidityInternal用于确定如果给定的金额被赎回/借款，帐户的流动性是多少
+        // 可以用于判断用户在所有上市的cTokens的抵押价值总额是否大于用户在所有上市的cTokens借款的价值总额
         (Error err, , uint shortfall) = getHypotheticalAccountLiquidityInternal(redeemer, CToken(cToken), redeemTokens, 0);
         if (err != Error.NO_ERROR) {
             return uint(err);
@@ -332,6 +340,7 @@ contract Comptroller is ComptrollerV7Storage, ComptrollerInterface, ComptrollerE
 
     /**
      * @notice Validates redeem and reverts on rejection. May emit logs.
+     * 验证赎回操作并在拒绝时回滚。可能发出日志。
      * @param cToken Asset being redeemed
      * @param redeemer The address redeeming the tokens
      * @param redeemAmount The amount of the underlying asset being redeemed
@@ -343,8 +352,9 @@ contract Comptroller is ComptrollerV7Storage, ComptrollerInterface, ComptrollerE
         redeemer;
 
         // Require tokens is zero or amount is also zero
+        // 确保redeemAmount大于0时redeemTokens不能为0,如果是这样就会被占便宜，转了redeemAmount给赎回者，赎回者的cTokens却没有减少，有安全风险
         if (redeemTokens == 0 && redeemAmount > 0) {
-            revert("redeemTokens zero");
+            revert("redeemTokens zero"); // 回滚
         }
     }
 
@@ -440,10 +450,15 @@ contract Comptroller is ComptrollerV7Storage, ComptrollerInterface, ComptrollerE
 
     /**
      * @notice Checks if the account should be allowed to repay a borrow in the given market
+     * 检查帐户是否应该被允许在给定的市场上偿还借款
      * @param cToken The market to verify the repay against
+     * 要偿还借款的市场
      * @param payer The account which would repay the asset
+     * 还款的账户
      * @param borrower The account which would borrowed the asset
+     * 借款的账户
      * @param repayAmount The amount of the underlying asset the account would repay
+     * 该账户将偿还的标的资产的金额
      * @return 0 if the repay is allowed, otherwise a semi-opaque error code (See ErrorReporter.sol)
      */
     function repayBorrowAllowed(
@@ -456,6 +471,7 @@ contract Comptroller is ComptrollerV7Storage, ComptrollerInterface, ComptrollerE
         borrower;
         repayAmount;
 
+        // 该cToken还没在市场上市
         if (!markets[cToken].isListed) {
             return uint(Error.MARKET_NOT_LISTED);
         }
@@ -1250,7 +1266,7 @@ contract Comptroller is ComptrollerV7Storage, ComptrollerInterface, ComptrollerE
      * @param cToken The market whose supply index to update
      * @dev Index is a cumulative sum of the COMP per cToken accrued.
      */
-    function updateCompSupplyIndex(address cToken) internal {
+    function updateCompSupplyIndex(address cToken) internal {//TODO
         CompMarketState storage supplyState = compSupplyState[cToken];
         uint supplySpeed = compSupplySpeeds[cToken];
         uint32 blockNumber = safe32(getBlockNumber(), "block number exceeds 32 bits");
@@ -1271,7 +1287,7 @@ contract Comptroller is ComptrollerV7Storage, ComptrollerInterface, ComptrollerE
      * @param cToken The market whose borrow index to update
      * @dev Index is a cumulative sum of the COMP per cToken accrued.
      */
-    function updateCompBorrowIndex(address cToken, Exp memory marketBorrowIndex) internal {
+    function updateCompBorrowIndex(address cToken, Exp memory marketBorrowIndex) internal {//TODO
         CompMarketState storage borrowState = compBorrowState[cToken];
         uint borrowSpeed = compBorrowSpeeds[cToken];
         uint32 blockNumber = safe32(getBlockNumber(), "block number exceeds 32 bits");
@@ -1292,7 +1308,7 @@ contract Comptroller is ComptrollerV7Storage, ComptrollerInterface, ComptrollerE
      * @param cToken The market in which the supplier is interacting
      * @param supplier The address of the supplier to distribute COMP to
      */
-    function distributeSupplierComp(address cToken, address supplier) internal {
+    function distributeSupplierComp(address cToken, address supplier) internal {//TODO
         // TODO: Don't distribute supplier COMP if the user is not in the supplier market.
         // This check should be as gas efficient as possible as distributeSupplierComp is called in many places.
         // - We really don't want to call an external contract as that's quite expensive.
@@ -1331,7 +1347,7 @@ contract Comptroller is ComptrollerV7Storage, ComptrollerInterface, ComptrollerE
      * @param cToken The market in which the borrower is interacting
      * @param borrower The address of the borrower to distribute COMP to
      */
-    function distributeBorrowerComp(address cToken, address borrower, Exp memory marketBorrowIndex) internal {
+    function distributeBorrowerComp(address cToken, address borrower, Exp memory marketBorrowIndex) internal {//TODO
         // TODO: Don't distribute supplier COMP if the user is not in the borrower market.
         // This check should be as gas efficient as possible as distributeBorrowerComp is called in many places.
         // - We really don't want to call an external contract as that's quite expensive.

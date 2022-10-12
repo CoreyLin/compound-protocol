@@ -63,6 +63,7 @@ contract CErc20 is CToken, CErc20Interface {
 
     /**
      * @notice Sender redeems cTokens in exchange for the underlying asset
+     * Sender赎回cTokens以换取标的资产
      * @dev Accrues interest whether or not the operation succeeds, unless reverted
      * @param redeemTokens The number of cTokens to redeem into underlying
      * @return uint 0=success, otherwise a failure (see ErrorReporter.sol for details)
@@ -102,7 +103,7 @@ contract CErc20 is CToken, CErc20Interface {
      * 偿还金额，或-1表示全部未偿还金额
      * @return uint 0=success, otherwise a failure (see ErrorReporter.sol for details)
      */
-    function repayBorrow(uint repayAmount) override external returns (uint) {//TODO
+    function repayBorrow(uint repayAmount) override external returns (uint) {
         repayBorrowInternal(repayAmount);
         return NO_ERROR;
     }
