@@ -37,11 +37,13 @@ contract ComptrollerV1Storage is UnitrollerAdminStorage {
     /**
      * @notice Multiplier used to calculate the maximum repayAmount when liquidating a borrow
      */
+    // 当清算借款时，用来计算最大还款额的乘数
     uint public closeFactorMantissa;
 
     /**
      * @notice Multiplier representing the discount on collateral that a liquidator receives
      */
+    // 表示清算人收到的抵押品贴现乘数
     uint public liquidationIncentiveMantissa;
 
     /**
@@ -99,7 +101,7 @@ contract ComptrollerV2Storage is ComptrollerV1Storage {
     bool public _mintGuardianPaused;
     bool public _borrowGuardianPaused;
     bool public transferGuardianPaused;
-    bool public seizeGuardianPaused;
+    bool public seizeGuardianPaused; // 查封停止标识
     mapping(address => bool) public mintGuardianPaused; // 按市场进行mint暂停，即存暂停
     mapping(address => bool) public borrowGuardianPaused; // 按市场进行借暂停
 }

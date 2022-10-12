@@ -251,8 +251,11 @@ abstract contract CToken is CTokenInterface, ExponentialNoError, TokenErrorRepor
 
     /**
      * @notice Return the borrow balance of account based on stored data
+     * 根据已存储数据返回账户借款余额，需要基于状态变量现计算
      * @param account The address whose balance should be calculated
+     * 需要计算余额的地址
      * @return The calculated balance
+     * 计算的借款余额
      */
     function borrowBalanceStored(address account) override public view returns (uint) {
         return borrowBalanceStoredInternal(account);
@@ -815,98 +818,142 @@ abstract contract CToken is CTokenInterface, ExponentialNoError, TokenErrorRepor
     /**
      * @notice The sender liquidates the borrowers collateral.
      *  The collateral seized is transferred to the liquidator.
+     * 发送方清算借款人抵押品。
+     * 扣押的抵押品转移给清盘人。
      * @param borrower The borrower of this cToken to be liquidated
+     * 要清算的cToken的借款人
      * @param cTokenCollateral The market in which to seize collateral from the borrower
+     * 从借款人手中夺取抵押品的市场
      * @param repayAmount The amount of the underlying borrowed asset to repay
+     * 需要偿还的标的借款资产的金额
      */
     function liquidateBorrowInternal(address borrower, uint repayAmount, CTokenInterface cTokenCollateral) internal nonReentrant {
+        // 对于当前CToken, 将应计利息应用于总借款和准备金。这将计算从最后一个检查点区块到当前区块的累积利息，并将新的检查点写入存储。
         accrueInterest();
 
+        // 对于抵押品CToken, 将应计利息应用于总借款和准备金。这将计算从最后一个检查点区块到当前区块的累积利息，并将新的检查点写入存储。
         uint error = cTokenCollateral.accrueInterest();
         if (error != NO_ERROR) {
             // accrueInterest emits logs on errors, but we still want to log the fact that an attempted liquidation failed
+            // accrueInterest发出关于错误的日志，但是我们仍然希望记录试图清算失败的事实
             revert LiquidateAccrueCollateralInterestFailed(error);
         }
 
         // liquidateBorrowFresh emits borrow-specific logs on errors, so we don't need to
+        // msg.sender是清算人，borrower是借款人
+        // 清算人清算借款人的抵押品。查封的抵押品转移给清算人。
         liquidateBorrowFresh(msg.sender, borrower, repayAmount, cTokenCollateral);
     }
 
     /**
      * @notice The liquidator liquidates the borrowers collateral.
      *  The collateral seized is transferred to the liquidator.
+     * 清算人清算借款人的抵押品。
+     * 扣押的抵押品转移给清算人。
      * @param borrower The borrower of this cToken to be liquidated
+     * 要清算的cToken的借款人
      * @param liquidator The address repaying the borrow and seizing collateral
+     * 偿还借款和得到抵押品的清算人地址
      * @param cTokenCollateral The market in which to seize collateral from the borrower
+     * 从借款人手中夺取抵押品的市场
      * @param repayAmount The amount of the underlying borrowed asset to repay
+     * 需要偿还的标的借款资产的金额
      */
+    // 注意，这个方法的安全校验有两个地方：一是调用liquidateBorrowAllowed判断是否允许清算借款，一是调用seizeAllowed判断是否允许查封抵押物
     function liquidateBorrowFresh(address liquidator, address borrower, uint repayAmount, CTokenInterface cTokenCollateral) internal {
         /* Fail if liquidate not allowed */
+        // 检查清算是否被允许发生
         uint allowed = comptroller.liquidateBorrowAllowed(address(this), address(cTokenCollateral), liquidator, borrower, repayAmount);
         if (allowed != 0) {
             revert LiquidateComptrollerRejection(allowed);
         }
 
         /* Verify market's block number equals current block number */
+        // 判断借款CToken的当前区块必须已经计算过利息了
         if (accrualBlockNumber != getBlockNumber()) {
             revert LiquidateFreshnessCheck();
         }
 
         /* Verify cTokenCollateral market's block number equals current block number */
+        // 判断抵押物CToken的当前区块必须已经计算过利息了
         if (cTokenCollateral.accrualBlockNumber() != getBlockNumber()) {
             revert LiquidateCollateralFreshnessCheck();
         }
 
         /* Fail if borrower = liquidator */
+        // 清算人不能是借款人本人
         if (borrower == liquidator) {
             revert LiquidateLiquidatorIsBorrower();
         }
 
         /* Fail if repayAmount = 0 */
+        // 偿还的借款不能为0
         if (repayAmount == 0) {
             revert LiquidateCloseAmountIsZero();
         }
 
         /* Fail if repayAmount = -1 */
+        // 偿还的借款不能为uint256的最大值
         if (repayAmount == type(uint).max) {
             revert LiquidateCloseAmountIsUintMax();
         }
 
         /* Fail if repayBorrow fails */
-        uint actualRepayAmount = repayBorrowFresh(liquidator, borrower, repayAmount);
+        // 借款由另一个用户(可能是借款人自己)偿还。
+        // repayBorrowFresh被用在三种场景中：1.借款人自己偿还借款 2.帮别人偿还借款 3.清算人清算
+        uint actualRepayAmount = repayBorrowFresh(liquidator, borrower, repayAmount); // 清算人实际还款金额
 
         /////////////////////////
         // EFFECTS & INTERACTIONS
         // (No safe failures beyond this point)
 
         /* We calculate the number of collateral tokens that will be seized */
+        // 计算将被查封的抵押品代币的数量
+        // 返回错误码，清算中要查封的cTokenCollateral tokens的数量，应该归清算人所有，这个数量包含了对清算人的激励。注意：seizeTokens中有一小部分要划拨到抵押物cToken的准备金中去。
         (uint amountSeizeError, uint seizeTokens) = comptroller.liquidateCalculateSeizeTokens(address(this), address(cTokenCollateral), actualRepayAmount);
         require(amountSeizeError == NO_ERROR, "LIQUIDATE_COMPTROLLER_CALCULATE_AMOUNT_SEIZE_FAILED");
 
         /* Revert if borrower collateral token balance < seizeTokens */
+        // 借款人在抵押物CToken拥有的cTokens余额必须大于要转给清算人的数量，这样才够。
         require(cTokenCollateral.balanceOf(borrower) >= seizeTokens, "LIQUIDATE_SEIZE_TOO_MUCH");
 
         // If this is also the collateral, run seizeInternal to avoid re-entrancy, otherwise make an external call
+        // 如果本借款CToken合约也是抵押品CToken合约，运行seizeInternal以避免重入。
+        // 进一步解释：不能调用seize，只能调用seizeInternal。因为liquidateBorrowFresh的外层调用方法liquidateBorrowInternal已经加了锁，而seize方法也加了锁，如果调seize方法就会发生重入失败。所以只能调没有加锁的seizeInternal以避免重入。
+        // 这是一种特殊场景，即借款人在同一个CToken中既有cTokens，代表借款人是储户，赚取利息，同时借款人又从这个CToken中借了标的资产。借款人同时在一个CToken中是储户和借款人。
+        // 这种场景，清算者有可能就把抵押物CToken设置为借款的CToken
         if (address(cTokenCollateral) == address(this)) {
+            // 将抵押品代币(该市场)转移到清算人。借款人抵押物cTokens减少，清算人抵押物cTokens增加，抵押物cTokens总供应量减少，本市场所持有的标的准备金总额增加。
+            // 注意：此处调的是本CToken的查封方法，本CToken同时是借款CToken和抵押物CToken
             seizeInternal(address(this), liquidator, borrower, seizeTokens);
         } else {
+            // 将抵押品代币(该市场)转移到清算人。借款人抵押物cTokens减少，清算人抵押物cTokens增加，抵押物cTokens总供应量减少，本市场所持有的标的准备金总额增加。
             require(cTokenCollateral.seize(liquidator, borrower, seizeTokens) == NO_ERROR, "token seizure failed");
         }
 
         /* We emit a LiquidateBorrow event */
+        // actualRepayAmount表示清算人实际还款金额
+        // seizeTokens表示清算中要查封的cTokenCollateral tokens的数量，应该归清算人所有，这个数量包含了对清算人的激励。注意：seizeTokens中有一小部分要划拨到抵押物cToken的准备金中去。
         emit LiquidateBorrow(liquidator, borrower, actualRepayAmount, address(cTokenCollateral), seizeTokens);
     }
 
     /**
      * @notice Transfers collateral tokens (this market) to the liquidator.
+     * 将抵押品代币(该市场)转移到清算人。借款人抵押物cTokens减少，清算人抵押物cTokens增加，抵押物cTokens总供应量减少，本市场所持有的标的准备金总额增加。
+     * 注意：针对本CToken是抵押物CToken的场景
      * @dev Will fail unless called by another cToken during the process of liquidation.
      *  Its absolutely critical to use msg.sender as the borrowed cToken and not a parameter.
+     * 将失败，除非在清算过程中被另一个cToken调用，即调用者是另一个CToken合约。使用msg.sender而非一个参数作为seizer cToken是绝对关键的。
      * @param liquidator The account receiving seized collateral
+     * 接收查封抵押物的账户
      * @param borrower The account having collateral seized
+     * 抵押物被查封的账户
      * @param seizeTokens The number of cTokens to seize
+     * 要查封的cTokens数量
      * @return uint 0=success, otherwise a failure (see ErrorReporter.sol for details)
      */
     function seize(address liquidator, address borrower, uint seizeTokens) override external nonReentrant returns (uint) {
+        // 注意此处用了msg.sender，代表正在执行清算操作的其他CToken。msg.sender作为参数传到seizeInternal中，然后作为comptroller.seizeAllowed的第二个参数，代表借款的CToken合约
         seizeInternal(msg.sender, liquidator, borrower, seizeTokens);
 
         return NO_ERROR;
@@ -914,35 +961,48 @@ abstract contract CToken is CTokenInterface, ExponentialNoError, TokenErrorRepor
 
     /**
      * @notice Transfers collateral tokens (this market) to the liquidator.
+     * 将抵押品代币(该市场)转移到清算人。借款人抵押物cTokens减少，清算人抵押物cTokens增加，抵押物cTokens总供应量减少，本市场所持有的标的准备金总额增加。
+     * 注意：针对本CToken是抵押物CToken的场景
      * @dev Called only during an in-kind liquidation, or by liquidateBorrow during the liquidation of another CToken.
-     *  Its absolutely critical to use msg.sender as the seizer cToken and not a parameter.
+     *  Its absolutely critical to use msg.sender as the seizer cToken and not a parameter. TODO：这一段注释是copy的seize函数的注释，并不适用于本函数，可以删掉
+     * 只在内部清算期间调用，或者在另一个CToken清算期间由liquidateBorrow调用。使用msg.sender而非一个参数作为seizer cToken是绝对关键的。
      * @param seizerToken The contract seizing the collateral (i.e. borrowed cToken)
+     * 查封抵押物的合约(比如，借款的cToken)。
      * @param liquidator The account receiving seized collateral
+     * 接收查封抵押物的账户
      * @param borrower The account having collateral seized
+     * 抵押物被查封的账户
      * @param seizeTokens The number of cTokens to seize
+     * 要查封的cTokens数量
      */
     function seizeInternal(address seizerToken, address liquidator, address borrower, uint seizeTokens) internal {
         /* Fail if seize not allowed */
+        // 检查是否允许查封资产
+        // 注意：第一个参数写死为address(this)，表示本CToken合约此时是抵押物合约；第二个参数seizerToken视情况而定，有可能是其他合约，也有可能是本合约
         uint allowed = comptroller.seizeAllowed(address(this), seizerToken, liquidator, borrower, seizeTokens);
         if (allowed != 0) {
             revert LiquidateSeizeComptrollerRejection(allowed);
         }
 
         /* Fail if borrower = liquidator */
+        // 清算人不能是借款人
         if (borrower == liquidator) {
             revert LiquidateSeizeLiquidatorIsBorrower();
         }
 
         /*
          * We calculate the new borrower and liquidator token balances, failing on underflow/overflow:
+         * 计算新的借款人和清算人在本cToken的cTokens代币余额，在下溢/上溢时失败:
          *  borrowerTokensNew = accountTokens[borrower] - seizeTokens
          *  liquidatorTokensNew = accountTokens[liquidator] + seizeTokens
          */
-        uint protocolSeizeTokens = mul_(seizeTokens, Exp({mantissa: protocolSeizeShareMantissa}));
-        uint liquidatorSeizeTokens = seizeTokens - protocolSeizeTokens;
-        Exp memory exchangeRate = Exp({mantissa: exchangeRateStoredInternal()});
-        uint protocolSeizeAmount = mul_ScalarTruncate(exchangeRate, protocolSeizeTokens);
-        uint totalReservesNew = totalReserves + protocolSeizeAmount;
+
+        // protocolSeizeShareMantissa是清算人查封的抵押物被加入准备金的比例
+        uint protocolSeizeTokens = mul_(seizeTokens, Exp({mantissa: protocolSeizeShareMantissa})); // 需要加入准备金的抵押物cTokens数量
+        uint liquidatorSeizeTokens = seizeTokens - protocolSeizeTokens; // 扣除了需要加入准备金的抵押物cTokens数量后，清算人应该净得的抵押物cTokens数量
+        Exp memory exchangeRate = Exp({mantissa: exchangeRateStoredInternal()}); // 借款CToken的汇率
+        uint protocolSeizeAmount = mul_ScalarTruncate(exchangeRate, protocolSeizeTokens); // 需要加入准备金的抵押物cTokens数量对应的标的资产数量
+        uint totalReservesNew = totalReserves + protocolSeizeAmount; // 准备金增加了，注意：准备金是以标的资产计算的，而不是以cTokens计算的
 
 
         /////////////////////////
@@ -950,15 +1010,16 @@ abstract contract CToken is CTokenInterface, ExponentialNoError, TokenErrorRepor
         // (No safe failures beyond this point)
 
         /* We write the calculated values into storage */
-        totalReserves = totalReservesNew;
-        totalSupply = totalSupply - protocolSeizeTokens;
-        accountTokens[borrower] = accountTokens[borrower] - seizeTokens;
-        accountTokens[liquidator] = accountTokens[liquidator] + liquidatorSeizeTokens;
+        // 将计算值写入storage持久化
+        totalReserves = totalReservesNew; // 更新本市场所持有的标的准备金总额
+        totalSupply = totalSupply - protocolSeizeTokens; // 更新流通中的CToken代币总数，减去需要加入准备金的抵押物cTokens数量。即cTokens减少，准备金标的资产增加。
+        accountTokens[borrower] = accountTokens[borrower] - seizeTokens; // 借款人应该失去seizeTokens数量的cTokens
+        accountTokens[liquidator] = accountTokens[liquidator] + liquidatorSeizeTokens; // 清算人应该得到liquidatorSeizeTokens cTokens数量
 
         /* Emit a Transfer event */
-        emit Transfer(borrower, liquidator, liquidatorSeizeTokens);
-        emit Transfer(borrower, address(this), protocolSeizeTokens);
-        emit ReservesAdded(address(this), protocolSeizeAmount, totalReservesNew);
+        emit Transfer(borrower, liquidator, liquidatorSeizeTokens); // 代表借款人给了清算人抵押物cTokens
+        emit Transfer(borrower, address(this), protocolSeizeTokens); // 代表借款人给了CToken合约需要加入准备金的抵押物cTokens数量
+        emit ReservesAdded(address(this), protocolSeizeAmount, totalReservesNew); // 代表在查封过程中准备金增加了
     }
 
 

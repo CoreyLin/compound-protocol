@@ -122,12 +122,17 @@ contract CErc20 is CToken, CErc20Interface {
     /**
      * @notice The sender liquidates the borrowers collateral.
      *  The collateral seized is transferred to the liquidator.
+     * sender清算借款人的抵押品
+     * 被没收的抵押品被移交给清算人。
      * @param borrower The borrower of this cToken to be liquidated
+     * 此cToken的借款人将被清算
      * @param repayAmount The amount of the underlying borrowed asset to repay
+     * 要偿还的标的借款资产的数额，即借款人在此CToken借的钱
      * @param cTokenCollateral The market in which to seize collateral from the borrower
+     * 从借款人手中夺取抵押品的市场，即另一个CToken，作为抵押品的CToken，注意：不是本CToken
      * @return uint 0=success, otherwise a failure (see ErrorReporter.sol for details)
      */
-    function liquidateBorrow(address borrower, uint repayAmount, CTokenInterface cTokenCollateral) override external returns (uint) {
+    function liquidateBorrow(address borrower, uint repayAmount, CTokenInterface cTokenCollateral) override external returns (uint) {//TODO
         liquidateBorrowInternal(borrower, repayAmount, cTokenCollateral);
         return NO_ERROR;
     }

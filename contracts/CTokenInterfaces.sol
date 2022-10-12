@@ -50,7 +50,7 @@ contract CTokenStorage {
 
     /**
      * @notice Contract which oversees inter-cToken operations
-     * 监督cToken间操作的合约
+     * 监督cToken间操作的审计合约。此合约非常重要。
      */
     ComptrollerInterface public comptroller;
 
@@ -127,7 +127,7 @@ contract CTokenStorage {
 
     /**
      * @notice Share of seized collateral that is added to reserves
-     * 缴获抵押物的份额被加入准备金
+     * 清算人查封的抵押物被加入准备金的比例
      */
     uint public constant protocolSeizeShareMantissa = 2.8e16; //2.8%
 }
